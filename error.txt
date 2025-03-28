@@ -1,0 +1,15 @@
+ UserWarning: liboqs version (major, minor) 0.13.0-dev differs from liboqs-python version 0.12.0
+  from oqs.oqs import (
+Encryption Time: 0.0052 seconds
+Memory Used: 0.8945 MB
+File encrypted: V2X_Scenario.xlsx.enc
+Decryption Time: 0.0048 seconds
+Memory Used: 0.0000 MB
+File decrypted: V2X_Scenario.xlsx.dec
+Traceback (most recent call last):
+  File "encrypt.py", line 87, in <module>
+    main()
+  File "encrypt.py", line 83, in main
+    assert orig.read() == dec.read(), "Decryption failed! File contents do not match."
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Decryption failed! File contents do not match.
