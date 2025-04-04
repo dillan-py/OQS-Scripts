@@ -1,5 +1,3 @@
-#pip install open-quantum-safe cryptography pandas openpyxl psutil
-
 import sys
 import time
 import psutil
@@ -9,9 +7,10 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import padding
 import pandas as pd
+import io
 
 def measure_memory():
-    return psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024  # in MB
+    return psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024  # MB
 
 def aes_encrypt(data, key, iv):
     padder = padding.PKCS7(128).padder()
@@ -30,53 +29,51 @@ def aes_decrypt(encrypted_data, key, iv):
 def encapsulate():
     with oqs.KeyEncapsulation("Kyber512") as kem:
         public_key = kem.generate_keypair()
+        private_key = kem.export_secret_key()
         ciphertext, shared_secret = kem.encap_secret(public_key)
-    return public_key, ciphertext, shared_secret
+    return public_key, private_key, ciphertext, shared_secret
 
 def decapsulate(ciphertext, private_key):
     with oqs.KeyEncapsulation("Kyber512") as kem:
-        kem.generate_keypair()  # Needed to set internal state
-        kem.set_private_key(private_key)
+        kem.generate_keypair()  # Initializes internal state
+        kem.import_secret_key(private_key)
         shared_secret = kem.decap_secret(ciphertext)
     return shared_secret
 
-def encrypt_file(input_file, encrypted_file, public_key, ciphertext):
+def encrypt_file(input_file, encrypted_file, key):
     iv = os.urandom(16)
 
-    # Load and read the xlsx file
+    # Load XLSX file into bytes (via CSV to simplify AES encoding)
     df = pd.read_excel(input_file)
     data = df.to_csv(index=False).encode()
 
-    # Encrypt
     enc_start = time.time()
-    memory_before = measure_memory()
-    key = ciphertext[:32]  # Use part of ciphertext as AES key (32 bytes for AES-256)
+    mem_before = measure_memory()
     encrypted_data = aes_encrypt(data, key, iv)
-    memory_after = measure_memory()
+    mem_after = measure_memory()
     enc_end = time.time()
 
     with open(encrypted_file, 'wb') as f:
         f.write(iv + encrypted_data)
 
-    return enc_end - enc_start, memory_after - memory_before
+    return enc_end - enc_start, mem_after - mem_before
 
-def decrypt_file(encrypted_file, decrypted_file, shared_secret):
+def decrypt_file(encrypted_file, decrypted_file, key):
     with open(encrypted_file, 'rb') as f:
         iv = f.read(16)
         encrypted_data = f.read()
 
     dec_start = time.time()
-    memory_before = measure_memory()
-    key = shared_secret[:32]
+    mem_before = measure_memory()
     decrypted_data = aes_decrypt(encrypted_data, key, iv)
-    memory_after = measure_memory()
+    mem_after = measure_memory()
     dec_end = time.time()
 
-    # Save the decrypted data to xlsx
-    df = pd.read_csv(pd.compat.StringIO(decrypted_data.decode()))
+    # Convert back from CSV to DataFrame
+    df = pd.read_csv(io.StringIO(decrypted_data.decode()))
     df.to_excel(decrypted_file, index=False)
 
-    return dec_end - dec_start, memory_after - memory_before, df
+    return dec_end - dec_start, mem_after - mem_before, df
 
 def main():
     if len(sys.argv) != 2:
@@ -87,34 +84,40 @@ def main():
     encrypted_file = "encrypted_file.bin"
     decrypted_file = "decrypted_file.xlsx"
 
-    print("[*] Starting encapsulation...")
+    print("[*] Starting key encapsulation...")
     start = time.time()
-    public_key, ciphertext, shared_secret = encapsulate()
+    public_key, private_key, ciphertext, shared_secret = encapsulate()
     encaps_time = time.time() - start
-    print("[+] Encapsulation done.")
+    print("[+] Encapsulation complete.")
 
-    enc_time, enc_mem = encrypt_file(input_file, encrypted_file, public_key, ciphertext)
+    aes_key = shared_secret[:32]  # Use first 32 bytes of shared secret as AES-256 key
+
+    print("[*] Encrypting file...")
+    enc_time, enc_mem = encrypt_file(input_file, encrypted_file, aes_key)
     print("[+] File encrypted.")
 
     print("[*] Starting decapsulation...")
     start = time.time()
-    decaps_secret = decapsulate(ciphertext, shared_secret)
+    decapsulated_secret = decapsulate(ciphertext, private_key)
     decaps_time = time.time() - start
-    print("[+] Decapsulation done.")
+    print("[+] Decapsulation complete.")
 
-    dec_time, dec_mem, df = decrypt_file(encrypted_file, decrypted_file, decaps_secret)
+    dec_key = decapsulated_secret[:32]
+
+    print("[*] Decrypting file...")
+    dec_time, dec_mem, df = decrypt_file(encrypted_file, decrypted_file, dec_key)
     print("[+] File decrypted.")
 
     print("\n--- Evaluation Metrics ---")
-    print(f"Encapsulation Time: {encaps_time:.4f} s")
-    print(f"Encryption Time: {enc_time:.4f} s")
-    print(f"Encryption Memory Usage: {enc_mem:.2f} MB")
-    print(f"Decapsulation Time: {decaps_time:.4f} s")
-    print(f"Decryption Time: {dec_time:.4f} s")
-    print(f"Decryption Memory Usage: {dec_mem:.2f} MB")
+    print(f"Encapsulation Time:     {encaps_time:.4f} s")
+    print(f"Encryption Time:        {enc_time:.4f} s")
+    print(f"Encryption Memory:      {enc_mem:.2f} MB")
+    print(f"Decapsulation Time:     {decaps_time:.4f} s")
+    print(f"Decryption Time:        {dec_time:.4f} s")
+    print(f"Decryption Memory:      {dec_mem:.2f} MB")
 
-    print("\n--- Decrypted File Contents ---")
-    print(df)
+    print("\n--- Decrypted File Preview ---")
+    print(df.head())
 
 if __name__ == "__main__":
     main()
